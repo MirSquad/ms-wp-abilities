@@ -1,0 +1,14 @@
+# Keep GitHub's downloadable archives limited to the plugin itself.
+#
+# `git archive` powers both the "Code -> Download ZIP" button and each release's
+# auto-generated "Source code" assets. Anything marked `export-ignore` is dropped
+# from that output, so a downloaded source archive contains only the plugin
+# subdirectory — not the CI config, dev docs, or git metadata that would ride
+# along otherwise. The recommended install is the named `<slug>-X.Y.Z.zip` release
+# asset, which the workflow builds from the plugin subtree.
+/.github        export-ignore
+/.gitignore     export-ignore
+/.gitattributes export-ignore
+/CLAUDE.md      export-ignore
+/README.md      export-ignore
+/CHANGELOG.md   export-ignore
