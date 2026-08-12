@@ -4,7 +4,7 @@ Tags: ai, mcp, abilities, rest-api, agents
 Requires at least: 6.9
 Tested up to: 7.0.3
 Requires PHP: 7.4
-Stable tag: 1.10.0
+Stable tag: 1.10.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -105,6 +105,11 @@ Yes, two things. When a post update is staged via preview-post-update, the pendi
 Abilities are registered under the `miriamschwab` category, which is specific to the miriamschwab.me site. These abilities are designed for single-site use and include site-specific post type awareness.
 
 == Changelog ==
+
+= 1.10.1 - 2026-08-12 =
+* Fixed (security): the rest-write hard-block guard could be bypassed by varying the case of the `force` parameter. Body keys are normalized with `sanitize_key()` before dispatch, which lowercases them — but the guard checked the raw keys, so `{"Force": true}` passed the check and still reached the endpoint as `force`, performing a permanent delete that bypasses trash. Body keys are now normalized once, before the check, and that same normalized array is what gets dispatched.
+* Fixed (security): the `/wp/v2/users`, `/wp/v2/plugins` and `/wp/v2/settings` route blocks were matched case-sensitively, while WordPress matches registered REST routes case-insensitively. A route such as `/wp/v2/Users/5` therefore skipped the block list and still reached the users endpoint. The block patterns are now case-insensitive, matching core's own route-matching behavior.
+* Changed: the hard-block guard moved to `includes/rest-write-guard.php` so it can be unit-tested on its own. No behavior change beyond the two fixes above.
 
 = 1.10.0 - 2026-08-10 =
 * Added: the WP Abilities admin page now flags what's new or no longer registered since your last visit. A snapshot of the ability list is saved to a site option (`mswpa_abilities_snapshot`) on each visit and diffed against the previous one; new/removed abilities are listed in a notice at the top of the page. First-ever visit just records the baseline silently, no false "everything is new" notice.

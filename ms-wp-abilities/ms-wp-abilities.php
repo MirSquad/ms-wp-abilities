@@ -3,7 +3,7 @@
  * Plugin Name:       MS WordPress Abilities
  * Plugin URI:        https://miriamschwab.me/plugins/ms-wp-abilities
  * Description:       Registers WordPress core and custom abilities for MCP Adapter access, enabling AI agents to interact with this WordPress site.
- * Version:           1.10.0
+ * Version:           1.10.1
  * Author:            Miriam Schwab
  * Author URI:        https://miriamschwab.me
  * License:           GPL-2.0-or-later
@@ -22,9 +22,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MSWPA_VERSION', '1.10.0' );
+define( 'MSWPA_VERSION', '1.10.1' );
 define( 'MSWPA_PREVIEW_EXPIRY_SECS', 600 );
 define( 'MSWPA_ABILITIES_SNAPSHOT_OPTION', 'mswpa_abilities_snapshot' );
+
+// REST write hard-block list. Kept in its own file so the guard can be
+// unit-tested without loading the plugin's hook registrations.
+require_once plugin_dir_path( __FILE__ ) . 'includes/rest-write-guard.php';
 
 add_action( 'init', 'mswpa_load_textdomain' );
 /**
@@ -1731,7 +1735,11 @@ function mswpa_register_abilities() {
 					return new WP_Error( 'invalid_method', __( 'Method must be POST, PUT, PATCH, or DELETE.', 'ms-wp-abilities' ) );
 				}
 				$route = '/' . ltrim( sanitize_text_field( $input['route'] ), '/' );
-				$body  = ! empty( $input['body'] ) && is_array( $input['body'] ) ? $input['body'] : array();
+				// Normalize body keys BEFORE the block check, so the guard inspects the
+				// exact keys that will be dispatched below. Checking raw keys here and
+				// normalizing at dispatch would let {"Force": true} pass the guard and
+				// still arrive at the endpoint as "force".
+				$body = ! empty( $input['body'] ) && is_array( $input['body'] ) ? mswpa_normalize_rest_body( $input['body'] ) : array();
 
 				$blocked = mswpa_rest_write_blocked_reason( $route, $method, $body );
 				if ( $blocked ) {
@@ -1740,7 +1748,7 @@ function mswpa_register_abilities() {
 
 				$request = new WP_REST_Request( $method, $route );
 				foreach ( $body as $key => $value ) {
-					$request->set_param( sanitize_key( $key ), $value );
+					$request->set_param( $key, $value );
 				}
 				$response = rest_do_request( $request );
 				$status   = $response->get_status();
@@ -1757,35 +1765,6 @@ function mswpa_register_abilities() {
 			'meta'                => array( 'mcp' => array( 'public' => true ) ),
 		)
 	);
-}
-
-// -------------------------------------------------------------------------
-// REST write hard-block list — enforced in code regardless of conversational
-// confirmation. See ms-wp-abilities-decisions-log.md for the rationale.
-// -------------------------------------------------------------------------
-
-/**
- * Return a human-readable reason if a REST write should be hard-blocked, or null to allow.
- *
- * @param string $route  REST route being requested.
- * @param string $method HTTP method.
- * @param array  $body   Request body parameters.
- * @return string|null Block reason, or null when the write is allowed.
- */
-function mswpa_rest_write_blocked_reason( string $route, string $method, array $body ) {
-	if ( preg_match( '#^/wp/v2/users(/|$|\?)#', $route ) ) {
-		return __( 'Writes to /wp/v2/users are blocked — creation, role changes, deletion, and password resets all live behind this one endpoint.', 'ms-wp-abilities' );
-	}
-	if ( 'DELETE' === $method && preg_match( '#^/wp/v2/plugins(/|$|\?)#', $route ) ) {
-		return __( 'Deleting plugins via REST is blocked.', 'ms-wp-abilities' );
-	}
-	if ( preg_match( '#^/wp/v2/settings(/|$|\?)#', $route ) ) {
-		return __( 'Writes to /wp/v2/settings are blocked.', 'ms-wp-abilities' );
-	}
-	if ( array_key_exists( 'force', $body ) || false !== stripos( $route, 'force=' ) ) {
-		return __( 'force (permanent delete bypassing trash) is blocked.', 'ms-wp-abilities' );
-	}
-	return null;
 }
 
 // -------------------------------------------------------------------------

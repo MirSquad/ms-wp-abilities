@@ -9,3 +9,8 @@ archive/
 *-session-opener.md
 *-changelog.md
 spec-*.md
+
+# Dev test tooling (composer.json / composer.lock ARE tracked; the installed
+# tree and PHPUnit's cache are not).
+/vendor/
+.phpunit.result.cache
