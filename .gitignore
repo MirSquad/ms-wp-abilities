@@ -14,3 +14,5 @@ spec-*.md
 # tree and PHPUnit's cache are not).
 /vendor/
 .phpunit.result.cache
+CLAUDE.md
+AGENTS.md
