@@ -3,7 +3,7 @@
  * Plugin Name:       MS WordPress Abilities
  * Plugin URI:        https://miriamschwab.me/plugins/ms-wp-abilities
  * Description:       Registers WordPress core and custom abilities for MCP Adapter access, enabling AI agents to interact with this WordPress site.
- * Version:           1.10.1
+ * Version:           1.10.2
  * Author:            Miriam Schwab
  * Author URI:        https://miriamschwab.me
  * License:           GPL-2.0-or-later
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MSWPA_VERSION', '1.10.1' );
+define( 'MSWPA_VERSION', '1.10.2' );
 define( 'MSWPA_PREVIEW_EXPIRY_SECS', 600 );
 define( 'MSWPA_ABILITIES_SNAPSHOT_OPTION', 'mswpa_abilities_snapshot' );
 
@@ -41,11 +41,29 @@ function mswpa_load_textdomain() {
 }
 
 // -------------------------------------------------------------------------
-// Expose WordPress 6.9 core abilities via the MCP Adapter default server.
+// Expose the WordPress core abilities via the MCP Adapter default server.
 // -------------------------------------------------------------------------
 add_filter( 'wp_register_ability_args', 'mswpa_enable_core_abilities_mcp_access', 10, 2 );
 /**
  * Mark selected WordPress core abilities as publicly exposed to the MCP Adapter.
+ *
+ * Redundant on WordPress 7.1 with MCP Adapter 0.6.0+, but deliberately retained.
+ * WordPress 7.1 sets a high-level `meta.public` flag on the core abilities itself,
+ * and MCP Adapter 0.6.0 added the inheritance that makes that flag sufficient:
+ * McpAbilityExposure::is_meta_public() honours an explicit `meta.mcp.public` when
+ * present and otherwise falls back to `meta.public`. On that pairing this filter
+ * only re-sets a value the two would already agree on -- verified against WP 7.1 +
+ * MCP Adapter 0.6.1, where discover-abilities returns the same 85 abilities, the
+ * three core ones included, with the filter on or off.
+ *
+ * It stays because neither half of that pairing is guaranteed by this plugin's
+ * declared requirements. WordPress 6.9 and 7.0 -- still supported per the
+ * `Requires at least: 6.9` header -- do not set `meta.public` on core abilities at
+ * all, and MCP Adapter before 0.6.0 reads only `meta.mcp.public`, with no adapter
+ * version floor declared in readme.txt. Without the filter, either case silently
+ * drops the three core abilities from MCP discovery, contradicting the feature the
+ * readme advertises. Remove this only alongside a floor of WP 7.1 and a declared
+ * MCP Adapter 0.6.0 minimum.
  *
  * @param array  $args         Ability registration args.
  * @param string $ability_name Ability being registered.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.2 — 2026-08-28
+
+- Changed: documented why the `wp_register_ability_args` filter that exposes the three WordPress core abilities to MCP is kept. On WordPress 7.1 with MCP Adapter 0.6.0+ it is redundant — core sets a high-level `meta.public` flag on those abilities and the adapter inherits it when `meta.mcp.public` is absent — but WordPress 6.9/7.0 do not set that flag and MCP Adapter before 0.6.0 reads only `meta.mcp.public`, so the filter is still required across this plugin's declared requirements. No functional change.
+- Changed: Tested up to WordPress 7.1.
+
 ## 1.10.1 — 2026-08-12
 
 - Fixed (security): the rest-write hard-block guard could be bypassed by varying the case of the `force` parameter. Body keys are normalized with `sanitize_key()` before dispatch, which lowercases them — but the guard checked the raw keys, so `{"Force": true}` passed the check and still reached the endpoint as `force`, performing a permanent delete that bypasses trash. Body keys are now normalized once, before the check, and that same normalized array is what gets dispatched.
