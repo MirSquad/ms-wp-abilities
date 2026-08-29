@@ -143,6 +143,67 @@ class AbilityFieldsTest extends TestCase {
 		);
 	}
 
+	// ---------------------------------------------------------------------
+	// Drift guards.
+	//
+	// Each ability that supports field selection writes the same list of field
+	// names three times: the `fields` enum in its input schema, the keys of the
+	// row its callback builds, and the names it passes to $wants(). Nothing in
+	// PHP ties those together, and a mismatch fails silently — an agent asking
+	// for a field the enum omits gets a validation error for a field that
+	// exists, and a $wants() typo means a lookup is always or never performed.
+	// ---------------------------------------------------------------------
+
+	/**
+	 * The advertised `fields` enum must match the row the callback actually builds.
+	 *
+	 * @return void
+	 */
+	public function testFieldsEnumMatchesTheRow(): void {
+		$checked = 0;
+
+		foreach ( mswpa_test_parse_registrations() as $name => $info ) {
+			if ( empty( $info['enum'] ) && empty( $info['row'] ) ) {
+				continue;
+			}
+			++$checked;
+
+			$this->assertSame(
+				array(),
+				array_values( array_diff( $info['enum'], $info['row'] ) ),
+				sprintf( '%s advertises fields its row does not contain.', $name )
+			);
+			$this->assertSame(
+				array(),
+				array_values( array_diff( $info['row'], $info['enum'] ) ),
+				sprintf( '%s returns fields callers cannot ask for by name.', $name )
+			);
+		}
+
+		$this->assertSame( 3, $checked, 'Expected get-posts, get-pages and get-media to support field selection.' );
+	}
+
+	/**
+	 * Every name passed to $wants() must be a real key of that ability's row.
+	 *
+	 * A typo here does not raise anything — it just makes the guarded lookup
+	 * unconditional or dead.
+	 *
+	 * @return void
+	 */
+	public function testEveryWantsReferenceIsARealField(): void {
+		foreach ( mswpa_test_parse_registrations() as $name => $info ) {
+			if ( empty( $info['wants'] ) ) {
+				continue;
+			}
+			$this->assertSame(
+				array(),
+				array_values( array_diff( $info['wants'], $info['row'] ) ),
+				sprintf( '%s guards a field name that its row does not define.', $name )
+			);
+		}
+	}
+
 	/**
 	 * A field holding null is kept when requested — null is a value, not absence.
 	 *

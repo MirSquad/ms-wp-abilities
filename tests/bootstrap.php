@@ -96,8 +96,12 @@ function wp_json_encode_fallback( $value ) {
  * Shared by AbilityPolicyTest and AbilityAuditLogTest so there is one parser to
  * keep correct rather than two.
  *
- * @return array<string, array{cap: string, required: string[], props: string[]}>
- *         Ability name => capability, required input keys, and all top-level input keys.
+ * @return array<string, array{cap: string, required: string[], props: string[], category: string,
+ *         mcp_public: bool, enum: string[], row: string[], wants: string[]}>
+ *         Ability name => capability, required input keys, all top-level input keys, category,
+ *         whether meta.mcp.public is set, and — for the abilities that support field selection —
+ *         the `fields` enum, the keys of the row the callback builds, and the names passed to
+ *         $wants().
  */
 function mswpa_test_parse_registrations(): array {
 	$source = (string) file_get_contents( __DIR__ . '/../ms-wp-abilities/ms-wp-abilities.php' );
@@ -131,10 +135,43 @@ function mswpa_test_parse_registrations(): array {
 		// Top-level input properties sit at exactly five tabs of indentation.
 		preg_match_all( "/^\t{5}'([a-zA-Z_]+)'\s*=>\s*array\(/m", $schema, $prop_names );
 
+		// Everything below mirrors something else in the same registration, and
+		// each mirror has a test asserting it still lines up.
+		$category = '';
+		if ( preg_match( "/'category'\s*=>\s*'([a-z0-9-]+)'/", $chunk, $cat_match ) ) {
+			$category = $cat_match[1];
+		}
+
+		$mcp_public = (bool) preg_match(
+			"/'meta'\s*=>\s*array\(\s*'mcp'\s*=>\s*array\(\s*'public'\s*=>\s*true/",
+			$chunk
+		);
+
+		// The `fields` enum, the row the callback builds, and the field names
+		// passed to $wants() are three hand-written lists of the same thing.
+		$enum = array();
+		if ( preg_match( "/'fields'\s*=>.*?'enum'\s*=>\s*array\(([^)]*)\)/s", $chunk, $enum_match ) ) {
+			preg_match_all( "/'([A-Za-z_]+)'/", $enum_match[1], $enum_names );
+			$enum = $enum_names[1];
+		}
+
+		$row = array();
+		if ( preg_match( '/\$row\s*=\s*array\((.*?)^\t{5}\);/ms', $chunk, $row_match ) ) {
+			preg_match_all( "/^\t{6}'([A-Za-z_]+)'\s*=>/m", $row_match[1], $row_names );
+			$row = $row_names[1];
+		}
+
+		preg_match_all( '/\$wants\(\s*\'([A-Za-z_]+)\'\s*\)/', $chunk, $wants_names );
+
 		$found[ $name_match[1] ] = array(
-			'cap'      => $cap,
-			'required' => $required,
-			'props'    => $prop_names[1],
+			'cap'        => $cap,
+			'required'   => $required,
+			'props'      => $prop_names[1],
+			'category'   => $category,
+			'mcp_public' => $mcp_public,
+			'enum'       => $enum,
+			'row'        => $row,
+			'wants'      => array_values( array_unique( $wants_names[1] ) ),
 		);
 	}
 

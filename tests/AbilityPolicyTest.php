@@ -170,6 +170,41 @@ class AbilityPolicyTest extends TestCase {
 		$this->assertNull( mswpa_required_capability_for( 'miriamschwab/not-a-real-ability' ) );
 	}
 
+	/**
+	 * Every ability must be exposed to MCP.
+	 *
+	 * MCP is the only channel these abilities are reachable through — they are
+	 * deliberately kept out of the REST API — so an ability registered without
+	 * `meta.mcp.public` is invisible to every client and fails silently. This was
+	 * a session-opener checklist line before it was a test; a checklist does not
+	 * fail a build.
+	 *
+	 * @return void
+	 */
+	public function testEveryAbilityIsExposedToMcp(): void {
+		foreach ( mswpa_test_parse_registrations() as $name => $info ) {
+			$this->assertTrue(
+				$info['mcp_public'],
+				sprintf( '%s does not set meta.mcp.public and would be invisible to MCP.', $name )
+			);
+		}
+	}
+
+	/**
+	 * Every ability must be registered under this plugin's category.
+	 *
+	 * @return void
+	 */
+	public function testEveryAbilityUsesThePluginCategory(): void {
+		foreach ( mswpa_test_parse_registrations() as $name => $info ) {
+			$this->assertSame(
+				'miriamschwab',
+				$info['category'],
+				sprintf( '%s is registered under the wrong category.', $name )
+			);
+		}
+	}
+
 	// ---------------------------------------------------------------------
 	// REST exposure.
 	// ---------------------------------------------------------------------
