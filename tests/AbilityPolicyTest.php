@@ -22,34 +22,26 @@ class AbilityPolicyTest extends TestCase {
 	/**
 	 * Ability name => capability, parsed out of the plugin's registrations.
 	 *
-	 * Parsing the source rather than loading it keeps this suite free of a
-	 * WordPress install: wp_register_ability() and current_user_can() do not
-	 * need to exist for the registrations to be readable.
+	 * Parsing lives in mswpa_test_parse_registrations() (tests/bootstrap.php) so
+	 * this test and AbilityAuditLogTest read the registrations through one
+	 * parser rather than two.
 	 *
 	 * @return array<string, string> Registered ability name => capability checked.
 	 */
 	private function registeredAbilities(): array {
-		$source = file_get_contents( __DIR__ . '/../ms-wp-abilities/ms-wp-abilities.php' );
-		$this->assertIsString( $source, 'Could not read the plugin file.' );
+		$parsed = mswpa_test_parse_registrations();
+		$this->assertNotEmpty( $parsed, 'Parsed no abilities out of the plugin file — the parser has drifted.' );
 
-		$chunks = explode( 'wp_register_ability(', $source );
-		array_shift( $chunks );
-
-		$found = array();
-		foreach ( $chunks as $chunk ) {
-			if ( ! preg_match( "/^\s*'(miriamschwab\/[a-z0-9-]+)'/", $chunk, $name_match ) ) {
-				continue;
-			}
-			$this->assertSame(
-				1,
-				preg_match( "/'permission_callback'\s*=>\s*fn\(\)\s*=>\s*current_user_can\(\s*'([a-z_]+)'\s*\)/", $chunk, $cap_match ),
-				sprintf( 'Could not parse a permission_callback for %s.', $name_match[1] )
+		$caps = array();
+		foreach ( $parsed as $name => $info ) {
+			$this->assertNotSame(
+				'',
+				$info['cap'],
+				sprintf( 'Could not parse a permission_callback for %s.', $name )
 			);
-			$found[ $name_match[1] ] = $cap_match[1];
+			$caps[ $name ] = $info['cap'];
 		}
-
-		$this->assertNotEmpty( $found, 'Parsed no abilities out of the plugin file — the parser has drifted.' );
-		return $found;
+		return $caps;
 	}
 
 	/**

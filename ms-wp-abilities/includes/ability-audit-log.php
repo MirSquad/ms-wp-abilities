@@ -50,20 +50,46 @@ const MSWPA_AUDIT_VALUE_MAX = 200;
  * Everything else contributes its key name only. These are identifiers — they
  * say which thing was acted on, not what was written to it.
  *
+ * **The write abilities do not share a naming convention for their identifier.**
+ * `post_id`, `ID`, `plugin_file` and `slug` are all in use, so this list has to
+ * be read off the actual input schemas rather than guessed. It was guessed in
+ * v1.11.0 and was wrong three ways — `ID` and `plugin_file` were missing, so the
+ * log recorded that a plugin was activated without recording which one, and a
+ * never-used `attachment_id` was present. AbilityAuditLogTest now asserts this
+ * list against the registrations in both directions, so it cannot drift again.
+ *
  * @return string[] Allowlisted input key names.
  */
 function mswpa_audit_loggable_keys(): array {
 	return array(
-		'post_id',
-		'attachment_id',
-		'route',
-		'method',
-		'slug',
-		'status',
-		'post_type',
-		'taxonomy',
-		'name',
-		'activate',
+		'post_id',     // patch-post-content, apply-post-update, trash-post.
+		'ID',          // update-media-meta.
+		'plugin_file', // activate-plugin, update-plugin.
+		'slug',        // install-plugin, update-theme, create-term.
+		'route',       // rest-write.
+		'method',      // rest-write.
+		'taxonomy',    // create-term.
+		'name',        // create-term.
+		'status',      // create-post.
+		'post_type',   // create-post.
+		'activate',    // install-plugin.
+	);
+}
+
+/**
+ * Input keys deliberately excluded from the allowlist because they carry content.
+ *
+ * Only the *required* parameters need naming here — AbilityAuditLogTest asserts
+ * every required parameter of every write ability is either loggable or listed
+ * here, so a new one has to be classified rather than silently dropped.
+ *
+ * @return string[] Input key names that must never have their values recorded.
+ */
+function mswpa_audit_content_keys(): array {
+	return array(
+		'title',   // create-post — a post title can be sensitive before publication.
+		'find',    // patch-post-content — the search string is page content.
+		'replace', // patch-post-content — as is the replacement.
 	);
 }
 

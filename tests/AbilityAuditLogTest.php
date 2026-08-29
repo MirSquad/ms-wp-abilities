@@ -169,6 +169,131 @@ class AbilityAuditLogTest extends TestCase {
 	}
 
 	// ---------------------------------------------------------------------
+	// Allowlist coverage — the drift guard.
+	//
+	// v1.11.0 shipped an allowlist written from assumption rather than from the
+	// input schemas: `ID` and `plugin_file` were missing, so the log recorded
+	// that a plugin was activated or media meta changed without recording which,
+	// and an `attachment_id` key no ability uses was present. These tests exist
+	// so that class of mistake fails the build instead of shipping.
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Every required parameter of every write ability must be classified.
+	 *
+	 * Either it identifies what was acted on (loggable) or it carries content
+	 * (deliberately excluded). A new required parameter that is neither means
+	 * somebody added a write ability without deciding what the audit trail
+	 * should say about it.
+	 *
+	 * @return void
+	 */
+	public function testEveryWriteAbilityRequiredParamIsClassified(): void {
+		$loggable = mswpa_audit_loggable_keys();
+		$content  = mswpa_audit_content_keys();
+		$checked  = 0;
+
+		foreach ( mswpa_test_parse_registrations() as $name => $info ) {
+			if ( ! mswpa_is_write_ability( $name ) ) {
+				continue;
+			}
+			foreach ( $info['required'] as $param ) {
+				++$checked;
+				$this->assertTrue(
+					in_array( $param, $loggable, true ) || in_array( $param, $content, true ),
+					sprintf(
+						'%s requires "%s", which is in neither mswpa_audit_loggable_keys() nor mswpa_audit_content_keys(). '
+							. 'Decide which it is: an identifier worth recording, or content that must never be stored.',
+						$name,
+						$param
+					)
+				);
+			}
+		}
+
+		$this->assertGreaterThan( 0, $checked, 'Checked no parameters — the registration parser has drifted.' );
+	}
+
+	/**
+	 * Every write ability must have at least one loggable identifier.
+	 *
+	 * An entry naming only the ability and the user, with no indication of what
+	 * it acted on, is the failure this whole section is about. create-post is the
+	 * documented exception: it creates rather than targets, so it has no
+	 * identifier at call time.
+	 *
+	 * @return void
+	 */
+	public function testEveryWriteAbilityRecordsSomeIdentifier(): void {
+		$loggable = mswpa_audit_loggable_keys();
+
+		foreach ( mswpa_test_parse_registrations() as $name => $info ) {
+			if ( ! mswpa_is_write_ability( $name ) || 'miriamschwab/create-post' === $name ) {
+				continue;
+			}
+			$this->assertNotEmpty(
+				array_intersect( $info['props'], $loggable ),
+				sprintf( '%s would be logged with no identifier at all.', $name )
+			);
+		}
+	}
+
+	/**
+	 * The allowlist must not name keys no write ability actually accepts.
+	 *
+	 * A dead entry advertises coverage that does not exist — which is how the
+	 * missing `ID` went unnoticed next to a useless `attachment_id`.
+	 *
+	 * @return void
+	 */
+	public function testAllowlistHasNoUnusedKeys(): void {
+		$all_props = array();
+		foreach ( mswpa_test_parse_registrations() as $name => $info ) {
+			if ( mswpa_is_write_ability( $name ) ) {
+				$all_props = array_merge( $all_props, $info['props'] );
+			}
+		}
+
+		$unused = array_values( array_diff( mswpa_audit_loggable_keys(), $all_props ) );
+		$this->assertSame(
+			array(),
+			$unused,
+			'Allowlisted keys that no write ability accepts: ' . implode( ', ', $unused )
+		);
+	}
+
+	/**
+	 * A key cannot be both an identifier and content.
+	 *
+	 * @return void
+	 */
+	public function testLoggableAndContentKeysDoNotOverlap(): void {
+		$this->assertSame(
+			array(),
+			array_values( array_intersect( mswpa_audit_loggable_keys(), mswpa_audit_content_keys() ) )
+		);
+	}
+
+	/**
+	 * The three identifiers v1.11.0 missed are recorded.
+	 *
+	 * Named explicitly so the specific regression stays covered even if the
+	 * generic tests above are ever loosened.
+	 *
+	 * @return void
+	 */
+	public function testPreviouslyMissedIdentifiersAreRecorded(): void {
+		$summary = mswpa_summarize_ability_input(
+			array(
+				'ID'          => 9362,
+				'plugin_file' => 'woocommerce/woocommerce.php',
+			)
+		);
+		$this->assertSame( '9362', $summary['values']['ID'] );
+		$this->assertSame( 'woocommerce/woocommerce.php', $summary['values']['plugin_file'] );
+	}
+
+	// ---------------------------------------------------------------------
 	// Ring buffer.
 	// ---------------------------------------------------------------------
 

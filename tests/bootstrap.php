@@ -83,3 +83,60 @@ function wp_json_encode_compat( $value ): string {
 function wp_json_encode_fallback( $value ) {
 	return json_encode( $value ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Test-only helper; wp_json_encode() is not loaded in this harness.
 }
+
+/**
+ * Parse this plugin's ability registrations out of the plugin source.
+ *
+ * The tests compare hand-maintained tables (the policy table, the audit log's
+ * allowlist) against the real registrations. Reading the source rather than
+ * loading it is what keeps this suite free of a WordPress install:
+ * wp_register_ability() and current_user_can() do not need to exist for the
+ * registrations to be readable.
+ *
+ * Shared by AbilityPolicyTest and AbilityAuditLogTest so there is one parser to
+ * keep correct rather than two.
+ *
+ * @return array<string, array{cap: string, required: string[], props: string[]}>
+ *         Ability name => capability, required input keys, and all top-level input keys.
+ */
+function mswpa_test_parse_registrations(): array {
+	$source = (string) file_get_contents( __DIR__ . '/../ms-wp-abilities/ms-wp-abilities.php' );
+	$chunks = explode( 'wp_register_ability(', $source );
+	array_shift( $chunks );
+
+	$found = array();
+	foreach ( $chunks as $chunk ) {
+		if ( ! preg_match( "/^\s*'(miriamschwab\/[a-z0-9-]+)'/", $chunk, $name_match ) ) {
+			continue;
+		}
+
+		$cap = '';
+		if ( preg_match( "/'permission_callback'\s*=>\s*fn\(\)\s*=>\s*current_user_can\(\s*'([a-z_]+)'\s*\)/", $chunk, $cap_match ) ) {
+			$cap = $cap_match[1];
+		}
+
+		// Isolate the input schema so output_schema keys are not mistaken for inputs.
+		$schema_start = strpos( $chunk, "'input_schema'" );
+		$schema_end   = strpos( $chunk, "'output_schema'" );
+		$schema       = ( false !== $schema_start && false !== $schema_end )
+			? substr( $chunk, $schema_start, $schema_end - $schema_start )
+			: '';
+
+		$required = array();
+		if ( preg_match( "/'required'\s*=>\s*array\(([^)]*)\)/", $schema, $req_match ) ) {
+			preg_match_all( "/'([a-zA-Z_]+)'/", $req_match[1], $req_names );
+			$required = $req_names[1];
+		}
+
+		// Top-level input properties sit at exactly five tabs of indentation.
+		preg_match_all( "/^\t{5}'([a-zA-Z_]+)'\s*=>\s*array\(/m", $schema, $prop_names );
+
+		$found[ $name_match[1] ] = array(
+			'cap'      => $cap,
+			'required' => $required,
+			'props'    => $prop_names[1],
+		);
+	}
+
+	return $found;
+}

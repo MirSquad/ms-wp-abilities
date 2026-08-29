@@ -4,7 +4,7 @@ Tags: ai, mcp, abilities, rest-api, agents
 Requires at least: 6.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.11.0
+Stable tag: 1.11.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -106,6 +106,11 @@ Abilities are registered under the `miriamschwab` category, which is specific to
 
 == Changelog ==
 
+= 1.11.1 - 2026-08-30 =
+* Fixed: the write audit trail added in 1.11.0 recorded *that* a plugin was activated or updated, and that a media item's metadata changed, without recording *which* one. The list of input fields whose values are safe to record was written from assumption rather than from the abilities' actual input schemas, and the write abilities do not share a naming convention for their identifier — `update-media-meta` takes `ID` and `activate-plugin`/`update-plugin` take `plugin_file`, neither of which was on the list, while an `attachment_id` field no ability accepts was on it. Those three are corrected. Entries written by 1.11.0 are unaffected and still readable; they simply lack the identifier for those abilities.
+* Changed: added the test that should have caught the above. Every required parameter of every write ability must now be classified as either an identifier worth recording or content that must never be stored, every write ability must record at least one identifier, and the list may not name fields no ability accepts. Suite grows to 94 tests. Registration parsing moved into the test bootstrap so the audit-log and policy-table drift guards read the registrations through one parser.
+* Changed: CI workflows use `actions/checkout@v5`; v4 runs on Node.js 20, which GitHub Actions has deprecated. No effect on the plugin.
+
 = 1.11.0 - 2026-08-30 =
 * Added: an audit trail of write-ability invocations, shown under Tools > WP Abilities. Built on the `wp_ability_invoked` action added in WordPress 7.1, which fires before validation and before the permission check — so calls that the rest-write hard-block guard refused, or that failed their permission check, are recorded too. Those previously left no trace anywhere. Read abilities are not recorded. Stored in the `mswpa_write_log` site option, capped at 100 entries; values are kept only for identifying fields, never for post content, REST bodies or meta values. Requires WordPress 7.1; on 6.9 and 7.0 the section reports no activity.
 * Added: an optional `fields` parameter on get-posts, get-pages and get-media, following the convention WordPress 7.1 introduced on `core/get-user-info` and `core/get-environment-info`. Requesting a subset keeps large result sets from consuming an agent's context window, and skips the per-row lookups (categories, tags, featured image, permalinks, attachment metadata) whose results would only be discarded. The ID is always returned so results stay actionable.
@@ -176,6 +181,9 @@ Abilities are registered under the `miriamschwab` category, which is specific to
 * Initial release.
 
 == Upgrade Notice ==
+
+= 1.11.1 =
+Fixes the write audit trail so it records which plugin or media item a write acted on. Recommended for anyone relying on that trail. No other behavior change.
 
 = 1.11.0 =
 Hardening and a new write audit trail under Tools > WP Abilities. No breaking changes. The abilities were never exposed to the core abilities REST API and still are not — that is now enforced explicitly rather than left to a default.

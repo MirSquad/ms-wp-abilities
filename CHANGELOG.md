@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.11.1 — 2026-08-30
+
+- Fixed: the write audit trail added in 1.11.0 recorded *that* a plugin was activated or updated, and that a media item's metadata changed, without recording *which* one. The list of input fields whose values are safe to record was written from assumption rather than from the abilities' actual input schemas, and the write abilities do not share a naming convention for their identifier — `update-media-meta` takes `ID` and `activate-plugin`/`update-plugin` take `plugin_file`, neither of which was on the list, while an `attachment_id` field no ability accepts was on it. Those three are corrected. Entries written by 1.11.0 are unaffected and still readable; they simply lack the identifier for those abilities.
+- Changed: added the test that should have caught the above. Every required parameter of every write ability must now be classified as either an identifier worth recording or content that must never be stored, every write ability must record at least one identifier, and the list may not name fields no ability accepts. Suite grows to 94 tests. Registration parsing moved into the test bootstrap so the audit-log and policy-table drift guards read the registrations through one parser.
+- Changed: CI workflows use `actions/checkout@v5`; v4 runs on Node.js 20, which GitHub Actions has deprecated. No effect on the plugin.
+
 ## 1.11.0 — 2026-08-30
 
 - Added: an audit trail of write-ability invocations, shown under Tools > WP Abilities. Built on the `wp_ability_invoked` action added in WordPress 7.1, which fires before validation and before the permission check — so calls that the rest-write hard-block guard refused, or that failed their permission check, are recorded too. Those previously left no trace anywhere. Read abilities are not recorded. Stored in the `mswpa_write_log` site option, capped at 100 entries; values are kept only for identifying fields, never for post content, REST bodies or meta values. Requires WordPress 7.1; on 6.9 and 7.0 the section reports no activity.
