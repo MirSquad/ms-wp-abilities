@@ -24,7 +24,7 @@ jobs:
           git archive --format=zip --prefix=ms-wp-abilities/ HEAD:ms-wp-abilities -o "ms-wp-abilities-${VERSION}.zip"
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ms-wp-abilities-*.zip
           generate_release_notes: true
