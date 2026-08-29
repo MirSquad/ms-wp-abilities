@@ -10,6 +10,7 @@
  *                                     (key suffix is a post ID; LIKE query removes all)
  *   mswpa_abilities_snapshot        — last-seen ability list, for the "what's new since
  *                                     your last visit" notice on the WP Abilities page
+ *   mswpa_write_log                 — audit trail of write-ability invocations
  *
  * @package MS_WP_Abilities
  */
@@ -29,3 +30,4 @@ $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, Word
 );
 
 delete_option( 'mswpa_abilities_snapshot' );
+delete_option( 'mswpa_write_log' );

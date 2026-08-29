@@ -4,7 +4,7 @@ Tags: ai, mcp, abilities, rest-api, agents
 Requires at least: 6.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.10.2
+Stable tag: 1.11.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -98,13 +98,21 @@ Each ability checks the appropriate WordPress capability: `edit_posts` for post 
 
 = Does the plugin store any data? =
 
-Yes, two things. When a post update is staged via preview-post-update, the pending update is stored temporarily in user meta under `_mswpa_pending_update_{post_id}`; it expires after 10 minutes and is consumed on apply. The WP Abilities admin page (Tools > WP Abilities) also stores a snapshot of the currently-registered ability list in a site option, `mswpa_abilities_snapshot`, so it can flag what's new or no longer registered since your last visit to that page. Both are removed on uninstall.
+Yes, three things. When a post update is staged via preview-post-update, the pending update is stored temporarily in user meta under `_mswpa_pending_update_{post_id}`; it expires after 10 minutes and is consumed on apply. The WP Abilities admin page (Tools > WP Abilities) also stores a snapshot of the currently-registered ability list in a site option, `mswpa_abilities_snapshot`, so it can flag what's new or no longer registered since your last visit to that page. On WordPress 7.1 and later, that page also keeps an audit trail of the last 100 invocations of an ability that changes content or configuration, in a site option, `mswpa_write_log`. The trail records the ability name, the user, the time, and the input field names; values are recorded only for identifying fields such as a post ID or a REST route, so post content, REST bodies and meta values are never stored. All three are removed on uninstall.
 
 = What is the site-specific category? =
 
 Abilities are registered under the `miriamschwab` category, which is specific to the miriamschwab.me site. These abilities are designed for single-site use and include site-specific post type awareness.
 
 == Changelog ==
+
+= 1.11.0 - 2026-08-30 =
+* Added: an audit trail of write-ability invocations, shown under Tools > WP Abilities. Built on the `wp_ability_invoked` action added in WordPress 7.1, which fires before validation and before the permission check — so calls that the rest-write hard-block guard refused, or that failed their permission check, are recorded too. Those previously left no trace anywhere. Read abilities are not recorded. Stored in the `mswpa_write_log` site option, capped at 100 entries; values are kept only for identifying fields, never for post content, REST bodies or meta values. Requires WordPress 7.1; on 6.9 and 7.0 the section reports no activity.
+* Added: an optional `fields` parameter on get-posts, get-pages and get-media, following the convention WordPress 7.1 introduced on `core/get-user-info` and `core/get-environment-info`. Requesting a subset keeps large result sets from consuming an agent's context window, and skips the per-row lookups (categories, tags, featured image, permalinks, attachment metadata) whose results would only be discarded. The ID is always returned so results stay actionable.
+* Changed (hardening): every ability this plugin registers is now explicitly marked `show_in_rest => false`. WordPress 7.1 resolves REST exposure as `meta.show_in_rest ?? meta.public ?? false`, so the high-level `meta.public` flag turns on the core abilities REST API unless an explicit value overrides it. These abilities already resolved to false, but only because `meta.public` happened to be absent. They are designed for the MCP conversational channel, where the agent confirms writes with the user before calling; the REST run endpoint has no such step. Forcing the flag in a registration filter also covers abilities added later. MCP discovery is unaffected — the adapter reads `meta.mcp.public` and `meta.public`, never `show_in_rest`.
+* Changed (hardening): the capability each ability declares is now re-checked centrally after its own `permission_callback` runs, via the `wp_ability_permission_result` filter added in WordPress 7.1. On a correct registration this changes nothing; it exists so an ability whose permission callback is wrong, weakened, or missing cannot execute anyway. A unit test asserts the central table matches the registrations, so the two cannot drift apart.
+* Changed (hardening): the rest-write hard-block guard now also runs at input-validation time via the `wp_ability_validate_input` filter added in WordPress 7.1, so a blocked route is refused before the permission check and before any execute-callback work. The copy inside the execute callback remains the enforcing one on WordPress 6.9 and 7.0, where that filter does not exist.
+* Fixed: five boolean inputs (`replace_all`, `hide_empty` on get-categories and get-tags, `include_items`, `activate`) were read with truthiness checks, so the string `"false"` — which PHP treats as true — would have been read as true. Real JSON booleans arrive correctly from the MCP adapter, so this was not reachable in normal use, but `activate: "false"` would have activated a plugin. All five now go through `rest_sanitize_boolean()`, the same coercion WordPress 7.1 applies to REST input.
 
 = 1.10.2 - 2026-08-28 =
 * Changed: documented why the `wp_register_ability_args` filter that exposes the three WordPress core abilities to MCP is kept. On WordPress 7.1 with MCP Adapter 0.6.0+ it is redundant — core sets a high-level `meta.public` flag on those abilities and the adapter inherits it when `meta.mcp.public` is absent — but WordPress 6.9/7.0 do not set that flag and MCP Adapter before 0.6.0 reads only `meta.mcp.public`, so the filter is still required across this plugin's declared requirements. No functional change.
@@ -168,6 +176,9 @@ Abilities are registered under the `miriamschwab` category, which is specific to
 * Initial release.
 
 == Upgrade Notice ==
+
+= 1.11.0 =
+Hardening and a new write audit trail under Tools > WP Abilities. No breaking changes. The abilities were never exposed to the core abilities REST API and still are not — that is now enforced explicitly rather than left to a default.
 
 = 1.6.1 =
 Removes the redundant `get-post-content` ability from 1.6.0. No breaking changes — use `ai/get-post-details` (fields: content) instead, if that ability is available on your site.

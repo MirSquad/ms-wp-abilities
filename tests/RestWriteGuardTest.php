@@ -358,24 +358,3 @@ class RestWriteGuardTest extends TestCase {
 		}
 	}
 }
-
-/**
- * Compact JSON encoder for assertion messages (WordPress's wp_json_encode is not stubbed).
- *
- * @param mixed $value Value to encode.
- * @return string JSON representation.
- */
-function wp_json_encode_compat( $value ): string {
-	$encoded = wp_json_encode_fallback( $value );
-	return false === $encoded ? '<unencodable>' : $encoded;
-}
-
-/**
- * json_encode wrapper isolated so the test file has no direct json_encode call.
- *
- * @param mixed $value Value to encode.
- * @return string|false JSON string, or false on failure.
- */
-function wp_json_encode_fallback( $value ) {
-	return json_encode( $value ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Test-only helper; wp_json_encode() is not loaded in this harness.
-}

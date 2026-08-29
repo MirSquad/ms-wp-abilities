@@ -2,9 +2,11 @@
 /**
  * PHPUnit bootstrap for the MS WordPress Abilities test suite.
  *
- * Loads only includes/rest-write-guard.php, not the whole plugin. The guard has
- * exactly two WordPress dependencies — sanitize_key() and __() — so it can be
+ * Loads the files under includes/, not the whole plugin. Between them they have
+ * exactly two WordPress dependencies — sanitize_key() and __() — so they can be
  * exercised against a pair of stubs instead of a full WordPress test install.
+ * Everything that needs more than that stays in ms-wp-abilities.php, where the
+ * hook registrations live; that split is what keeps this suite stub-sized.
  *
  * sanitize_key() is the function the guard's correctness actually rests on, so
  * it is reproduced exactly as WordPress implements it (minus the filter hook,
@@ -57,3 +59,27 @@ if ( ! function_exists( '__' ) ) {
 }
 
 require_once __DIR__ . '/../ms-wp-abilities/includes/rest-write-guard.php';
+require_once __DIR__ . '/../ms-wp-abilities/includes/ability-policy.php';
+require_once __DIR__ . '/../ms-wp-abilities/includes/ability-fields.php';
+require_once __DIR__ . '/../ms-wp-abilities/includes/ability-audit-log.php';
+
+/**
+ * Compact JSON encoder for assertion messages (WordPress's wp_json_encode is not stubbed).
+ *
+ * @param mixed $value Value to encode.
+ * @return string JSON representation.
+ */
+function wp_json_encode_compat( $value ): string {
+	$encoded = wp_json_encode_fallback( $value );
+	return false === $encoded ? '<unencodable>' : $encoded;
+}
+
+/**
+ * json_encode wrapper isolated so the test files have no direct json_encode call.
+ *
+ * @param mixed $value Value to encode.
+ * @return string|false JSON string, or false on failure.
+ */
+function wp_json_encode_fallback( $value ) {
+	return json_encode( $value ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Test-only helper; wp_json_encode() is not loaded in this harness.
+}

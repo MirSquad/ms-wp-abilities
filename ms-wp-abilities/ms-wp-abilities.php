@@ -3,7 +3,7 @@
  * Plugin Name:       MS WordPress Abilities
  * Plugin URI:        https://miriamschwab.me/plugins/ms-wp-abilities
  * Description:       Registers WordPress core and custom abilities for MCP Adapter access, enabling AI agents to interact with this WordPress site.
- * Version:           1.10.2
+ * Version:           1.11.0
  * Author:            Miriam Schwab
  * Author URI:        https://miriamschwab.me
  * License:           GPL-2.0-or-later
@@ -22,13 +22,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MSWPA_VERSION', '1.10.2' );
+define( 'MSWPA_VERSION', '1.11.0' );
 define( 'MSWPA_PREVIEW_EXPIRY_SECS', 600 );
 define( 'MSWPA_ABILITIES_SNAPSHOT_OPTION', 'mswpa_abilities_snapshot' );
+define( 'MSWPA_AUDIT_LOG_OPTION', 'mswpa_write_log' );
 
-// REST write hard-block list. Kept in its own file so the guard can be
-// unit-tested without loading the plugin's hook registrations.
+// Supporting logic lives in includes/ so each piece can be unit-tested without
+// loading the plugin's hook registrations. See tests/.
 require_once plugin_dir_path( __FILE__ ) . 'includes/rest-write-guard.php';
+require_once plugin_dir_path( __FILE__ ) . 'includes/ability-policy.php';
+require_once plugin_dir_path( __FILE__ ) . 'includes/ability-fields.php';
+require_once plugin_dir_path( __FILE__ ) . 'includes/ability-audit-log.php';
 
 add_action( 'init', 'mswpa_load_textdomain' );
 /**
@@ -79,6 +83,134 @@ function mswpa_enable_core_abilities_mcp_access( array $args, string $ability_na
 		$args['meta']['mcp']['public'] = true;
 	}
 	return $args;
+}
+
+// -------------------------------------------------------------------------
+// Ability guard rails.
+// -------------------------------------------------------------------------
+// Three layers that sit outside the individual ability registrations, so they
+// stay correct for abilities added later without anyone remembering to wire
+// them up. The registration filter works on every supported WordPress version;
+// the two execute-time hooks are WordPress 7.1+ and simply never fire on 6.9 or
+// 7.0. That is why each is a SECOND line of defense and never the only one:
+// every ability keeps its own permission_callback, and the rest-write
+// hard-block guard still runs inside the execute callback. These catch the case
+// where one of those is wrong, not the case where it is absent.
+
+add_filter( 'wp_register_ability_args', 'mswpa_force_no_rest_exposure', 10, 2 );
+
+add_filter( 'wp_ability_validate_input', 'mswpa_validate_ability_input', 10, 3 );
+/**
+ * Run the rest-write hard-block guard at input-validation time.
+ *
+ * The guard already runs inside the rest-write execute callback, and that stays
+ * the enforcing copy — it is what protects WordPress 6.9 and 7.0, where this
+ * filter does not exist. Running it here as well, on 7.1+, buys two things:
+ * the block happens before the permission check and before any execute callback
+ * work, and it survives a future refactor of that callback.
+ *
+ * `wp_ability_validate_input` is the right hook for this rather than
+ * `wp_ability_permission_result`, which is the other candidate: a WP_Error
+ * returned from a permission filter is swallowed by WP_Ability::execute() and
+ * replaced with a generic "does not have necessary permission" message, so the
+ * agent would never learn WHICH rule it hit. A WP_Error returned here reaches
+ * the caller intact, and the guard's specific reason is the useful part — it is
+ * what tells the agent to stop retrying variants of a blocked route.
+ *
+ * @param true|WP_Error $is_valid     Validation result from schema validation.
+ * @param mixed         $input        Input being validated.
+ * @param string        $ability_name Ability being validated.
+ * @return true|WP_Error Validation result.
+ */
+function mswpa_validate_ability_input( $is_valid, $input, $ability_name ) {
+	if ( 'miriamschwab/rest-write' !== $ability_name || is_wp_error( $is_valid ) ) {
+		return $is_valid;
+	}
+	if ( ! is_array( $input ) || empty( $input['route'] ) || empty( $input['method'] ) ) {
+		// Missing required fields — let the execute callback report that.
+		return $is_valid;
+	}
+
+	$route  = '/' . ltrim( sanitize_text_field( $input['route'] ), '/' );
+	$method = strtoupper( sanitize_text_field( $input['method'] ) );
+	$body   = ! empty( $input['body'] ) && is_array( $input['body'] ) ? $input['body'] : array();
+
+	$blocked = mswpa_rest_write_blocked_reason( $route, $method, $body );
+	if ( $blocked ) {
+		return new WP_Error( 'rest_write_blocked', $blocked, array( 'status' => 403 ) );
+	}
+	return $is_valid;
+}
+
+add_filter( 'wp_ability_permission_result', 'mswpa_enforce_capability_floor', 10, 4 );
+/**
+ * Re-check the capability an ability declares in the policy table.
+ *
+ * Every ability already checks its own capability in its permission_callback,
+ * so on a correct registration this changes nothing — which is the intent. It
+ * exists for the incorrect one: an ability added with a copy-pasted callback
+ * checking the wrong capability, or a callback that regressed to something
+ * permissive, cannot execute while its policy-table entry still names the right
+ * capability. AbilityPolicyTest asserts the table matches the registrations, so
+ * the two cannot drift apart silently.
+ *
+ * Denies with `false` rather than a WP_Error on purpose: WP_Ability::execute()
+ * discards a permission WP_Error's message and substitutes a generic one, so a
+ * specific message here would be written and never read. Explanatory refusals
+ * belong in mswpa_validate_ability_input() instead.
+ *
+ * Abilities outside this plugin's namespace are passed through untouched.
+ *
+ * @param bool|WP_Error $permission   Result from the ability's permission_callback.
+ * @param string        $ability_name Ability being checked.
+ * @param mixed         $input        Input for the permission check.
+ * @param WP_Ability    $ability      The ability instance.
+ * @return bool|WP_Error Permission result.
+ */
+function mswpa_enforce_capability_floor( $permission, $ability_name, $input, $ability ) {
+	unset( $input, $ability );
+
+	if ( ! mswpa_is_own_ability( $ability_name ) ) {
+		return $permission;
+	}
+	// Already denied — nothing to add.
+	if ( true !== $permission ) {
+		return $permission;
+	}
+
+	$required = mswpa_required_capability_for( $ability_name );
+	if ( null === $required ) {
+		// Registered under this plugin's namespace but absent from the policy
+		// table. Fail closed: an unclassified ability is one nothing here has
+		// reviewed, and AbilityPolicyTest fails the build for exactly this.
+		return false;
+	}
+
+	return current_user_can( $required );
+}
+
+add_action( 'wp_ability_invoked', 'mswpa_record_ability_invocation', 10, 2 );
+/**
+ * Record a write-ability invocation to the audit log.
+ *
+ * Fires before validation and before the permission check, so blocked and
+ * denied calls are recorded too — those are the ones with no other trace. See
+ * includes/ability-audit-log.php for what is and is not stored.
+ *
+ * @param string $ability_name Ability that was invoked.
+ * @param mixed  $input        Raw input, before normalization.
+ * @return void
+ */
+function mswpa_record_ability_invocation( $ability_name, $input ) {
+	if ( ! is_string( $ability_name ) || ! mswpa_is_write_ability( $ability_name ) ) {
+		return;
+	}
+
+	$log   = get_option( MSWPA_AUDIT_LOG_OPTION, array() );
+	$log   = is_array( $log ) ? $log : array();
+	$entry = mswpa_audit_entry( $ability_name, $input, get_current_user_id(), time() );
+
+	update_option( MSWPA_AUDIT_LOG_OPTION, mswpa_audit_append( $log, $entry ), false );
 }
 
 // -------------------------------------------------------------------------
@@ -169,6 +301,14 @@ function mswpa_register_abilities() {
 						'enum'    => array( 'DESC', 'ASC' ),
 						'default' => 'DESC',
 					),
+					'fields'        => array(
+						'type'        => 'array',
+						'description' => 'Subset of properties to return, to keep the response small. Omit for all of them. ID is always included so results stay actionable.',
+						'items'       => array(
+							'type' => 'string',
+							'enum' => array( 'ID', 'post_title', 'post_status', 'post_type', 'post_date', 'post_modified', 'post_excerpt', 'categories', 'tags', 'featured_image', 'permalink', 'edit_link' ),
+						),
+					),
 				),
 			),
 			'output_schema'       => array(
@@ -188,9 +328,15 @@ function mswpa_register_abilities() {
 					'order'         => isset( $input['order'] ) && strtoupper( $input['order'] ) === 'ASC' ? 'ASC' : 'DESC',
 				);
 				$posts  = get_posts( $args );
+				$fields = mswpa_requested_fields( $input['fields'] ?? null );
+				// Each of these costs its own query per post, so skip the work
+				// rather than computing a value that is about to be discarded.
+				$wants  = static function ( string $field ) use ( $fields ): bool {
+					return empty( $fields ) || in_array( $field, $fields, true );
+				};
 				$result = array();
 				foreach ( $posts as $post ) {
-					$result[] = array(
+					$row = array(
 						'ID'             => $post->ID,
 						'post_title'     => $post->post_title,
 						'post_status'    => $post->post_status,
@@ -198,12 +344,13 @@ function mswpa_register_abilities() {
 						'post_date'      => $post->post_date,
 						'post_modified'  => $post->post_modified,
 						'post_excerpt'   => $post->post_excerpt,
-						'categories'     => wp_get_post_categories( $post->ID, array( 'fields' => 'names' ) ),
-						'tags'           => wp_get_post_tags( $post->ID, array( 'fields' => 'names' ) ),
-						'featured_image' => has_post_thumbnail( $post->ID ) ? wp_get_attachment_url( get_post_thumbnail_id( $post->ID ) ) : null,
-						'permalink'      => get_permalink( $post->ID ),
-						'edit_link'      => get_edit_post_link( $post->ID, 'raw' ),
+						'categories'     => $wants( 'categories' ) ? wp_get_post_categories( $post->ID, array( 'fields' => 'names' ) ) : null,
+						'tags'           => $wants( 'tags' ) ? wp_get_post_tags( $post->ID, array( 'fields' => 'names' ) ) : null,
+						'featured_image' => $wants( 'featured_image' ) && has_post_thumbnail( $post->ID ) ? wp_get_attachment_url( get_post_thumbnail_id( $post->ID ) ) : null,
+						'permalink'      => $wants( 'permalink' ) ? get_permalink( $post->ID ) : null,
+						'edit_link'      => $wants( 'edit_link' ) ? get_edit_post_link( $post->ID, 'raw' ) : null,
 					);
+					$result[] = mswpa_apply_fields( $row, $fields, array( 'ID' ) );
 				}
 				return $result;
 			},
@@ -240,6 +387,14 @@ function mswpa_register_abilities() {
 						'description' => 'Parent page ID. 0 for top-level pages only.',
 						'default'     => -1,
 					),
+					'fields'   => array(
+						'type'        => 'array',
+						'description' => 'Subset of properties to return, to keep the response small. Omit for all of them. ID is always included so results stay actionable.',
+						'items'       => array(
+							'type' => 'string',
+							'enum' => array( 'ID', 'post_title', 'post_status', 'post_date', 'post_parent', 'menu_order', 'permalink', 'edit_link' ),
+						),
+					),
 				),
 			),
 			'output_schema'       => array(
@@ -260,18 +415,23 @@ function mswpa_register_abilities() {
 					$args['post_parent'] = absint( $input['parent'] );
 				}
 				$pages  = get_posts( $args );
+				$fields = mswpa_requested_fields( $input['fields'] ?? null );
+				$wants  = static function ( string $field ) use ( $fields ): bool {
+					return empty( $fields ) || in_array( $field, $fields, true );
+				};
 				$result = array();
 				foreach ( $pages as $page ) {
-					$result[] = array(
+					$row = array(
 						'ID'          => $page->ID,
 						'post_title'  => $page->post_title,
 						'post_status' => $page->post_status,
 						'post_date'   => $page->post_date,
 						'post_parent' => $page->post_parent,
 						'menu_order'  => $page->menu_order,
-						'permalink'   => get_permalink( $page->ID ),
-						'edit_link'   => get_edit_post_link( $page->ID, 'raw' ),
+						'permalink'   => $wants( 'permalink' ) ? get_permalink( $page->ID ) : null,
+						'edit_link'   => $wants( 'edit_link' ) ? get_edit_post_link( $page->ID, 'raw' ) : null,
 					);
+					$result[] = mswpa_apply_fields( $row, $fields, array( 'ID' ) );
 				}
 				return $result;
 			},
@@ -437,7 +597,7 @@ function mswpa_register_abilities() {
 				$content     = $post->post_content;
 				$find        = $input['find'];
 				$replace     = $input['replace'];
-				$replace_all = ! empty( $input['replace_all'] );
+				$replace_all = rest_sanitize_boolean( $input['replace_all'] ?? false );
 				$count       = substr_count( $content, $find );
 				if ( 0 === $count ) {
 					return new WP_Error( 'string_not_found', __( 'The find string was not found in the post content.', 'ms-wp-abilities' ) );
@@ -858,7 +1018,7 @@ function mswpa_register_abilities() {
 			'execute_callback'    => function ( $input ) {
 				$categories = get_categories(
 					array(
-						'hide_empty' => isset( $input['hide_empty'] ) ? (bool) $input['hide_empty'] : false,
+						'hide_empty' => rest_sanitize_boolean( $input['hide_empty'] ?? false ),
 						'orderby'    => 'name',
 						'order'      => 'ASC',
 					)
@@ -903,7 +1063,7 @@ function mswpa_register_abilities() {
 			'execute_callback'    => function ( $input ) {
 				$tags   = get_tags(
 					array(
-						'hide_empty' => isset( $input['hide_empty'] ) ? (bool) $input['hide_empty'] : false,
+						'hide_empty' => rest_sanitize_boolean( $input['hide_empty'] ?? false ),
 						'orderby'    => 'name',
 						'order'      => 'ASC',
 					)
@@ -1007,6 +1167,14 @@ function mswpa_register_abilities() {
 						'type'    => 'string',
 						'default' => '',
 					),
+					'fields'    => array(
+						'type'        => 'array',
+						'description' => 'Subset of properties to return, to keep the response small. Omit for all of them. ID is always included so results stay actionable.',
+						'items'       => array(
+							'type' => 'string',
+							'enum' => array( 'ID', 'title', 'caption', 'alt', 'url', 'mime_type', 'date', 'width', 'height', 'edit_link' ),
+						),
+					),
 				),
 			),
 			'output_schema'       => array(
@@ -1025,21 +1193,27 @@ function mswpa_register_abilities() {
 					$args['post_mime_type'] = sanitize_text_field( $input['mime_type'] );
 				}
 				$attachments = get_posts( $args );
+				$fields      = mswpa_requested_fields( $input['fields'] ?? null );
+				$wants       = static function ( string $field ) use ( $fields ): bool {
+					return empty( $fields ) || in_array( $field, $fields, true );
+				};
+				$needs_meta  = $wants( 'width' ) || $wants( 'height' );
 				$result      = array();
 				foreach ( $attachments as $att ) {
-					$meta = wp_get_attachment_metadata( $att->ID );
-					$result[] = array(
+					$meta = $needs_meta ? wp_get_attachment_metadata( $att->ID ) : array();
+					$row  = array(
 						'ID'        => $att->ID,
 						'title'     => $att->post_title,
 						'caption'   => $att->post_excerpt,
-						'alt'       => get_post_meta( $att->ID, '_wp_attachment_image_alt', true ),
-						'url'       => wp_get_attachment_url( $att->ID ),
+						'alt'       => $wants( 'alt' ) ? get_post_meta( $att->ID, '_wp_attachment_image_alt', true ) : null,
+						'url'       => $wants( 'url' ) ? wp_get_attachment_url( $att->ID ) : null,
 						'mime_type' => $att->post_mime_type,
 						'date'      => $att->post_date,
-						'width'     => $meta['width'] ?? null,
-						'height'    => $meta['height'] ?? null,
-						'edit_link' => get_edit_post_link( $att->ID, 'raw' ),
+						'width'     => is_array( $meta ) ? ( $meta['width'] ?? null ) : null,
+						'height'    => is_array( $meta ) ? ( $meta['height'] ?? null ) : null,
+						'edit_link' => $wants( 'edit_link' ) ? get_edit_post_link( $att->ID, 'raw' ) : null,
 					);
+					$result[] = mswpa_apply_fields( $row, $fields, array( 'ID' ) );
 				}
 				return $result;
 			},
@@ -1231,7 +1405,7 @@ function mswpa_register_abilities() {
 						'slug'    => $menu->slug,
 						'count'   => $menu->count,
 					);
-					if ( ! isset( $input['include_items'] ) || $input['include_items'] ) {
+					if ( rest_sanitize_boolean( $input['include_items'] ?? true ) ) {
 						$items = wp_get_nav_menu_items( $menu->term_id );
 						$entry['items'] = array();
 						if ( $items ) {
@@ -1384,7 +1558,7 @@ function mswpa_register_abilities() {
 
 				$plugin_file = $upgrader->plugin_info();
 				$activated   = false;
-				if ( ! empty( $input['activate'] ) && $plugin_file ) {
+				if ( rest_sanitize_boolean( $input['activate'] ?? false ) && $plugin_file ) {
 					require_once ABSPATH . 'wp-admin/includes/plugin.php';
 					$activate_result = activate_plugin( $plugin_file );
 					$activated       = ! is_wp_error( $activate_result );
@@ -2259,6 +2433,78 @@ function mswpa_render_admin_page() {
 										<summary><?php esc_html_e( 'Input schema', 'ms-wp-abilities' ); ?></summary>
 										<pre class="mswpa-schema"><?php echo esc_html( (string) wp_json_encode( $schema, JSON_PRETTY_PRINT ) ); ?></pre>
 									</details>
+								<?php endif; ?>
+							</td>
+						</tr>
+					<?php endforeach; ?>
+				<?php endif; ?>
+			</tbody>
+		</table>
+
+		<h2><?php esc_html_e( 'Recent write activity', 'ms-wp-abilities' ); ?></h2>
+		<?php
+		$audit_log   = get_option( MSWPA_AUDIT_LOG_OPTION, array() );
+		$audit_log   = is_array( $audit_log ) ? $audit_log : array();
+		$time_format = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
+		?>
+		<p class="description">
+			<?php
+			printf(
+				/* translators: %d: maximum number of log entries retained. */
+				esc_html__( 'The last %d invocations of an ability that changes content or configuration, newest first. Recorded before the permission check, so calls that were blocked or refused appear here too. Input values are recorded only for identifying fields — post content, REST bodies and meta values are never stored.', 'ms-wp-abilities' ),
+				(int) MSWPA_AUDIT_LOG_MAX
+			);
+			?>
+		</p>
+		<table class="widefat striped">
+			<thead>
+				<tr>
+					<th><?php esc_html_e( 'When', 'ms-wp-abilities' ); ?></th>
+					<th><?php esc_html_e( 'User', 'ms-wp-abilities' ); ?></th>
+					<th><?php esc_html_e( 'Ability', 'ms-wp-abilities' ); ?></th>
+					<th><?php esc_html_e( 'Input', 'ms-wp-abilities' ); ?></th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php if ( empty( $audit_log ) ) : ?>
+					<tr>
+						<td colspan="4"><?php esc_html_e( 'No write abilities have been invoked yet.', 'ms-wp-abilities' ); ?></td>
+					</tr>
+				<?php else : ?>
+					<?php foreach ( $audit_log as $entry ) : ?>
+						<?php
+						$entry_user = isset( $entry['user'] ) ? (int) $entry['user'] : 0;
+						$user_data  = $entry_user ? get_userdata( $entry_user ) : false;
+						$user_label = $user_data ? $user_data->user_login : __( 'none', 'ms-wp-abilities' );
+						$entry_keys = isset( $entry['keys'] ) && is_array( $entry['keys'] ) ? $entry['keys'] : array();
+						$entry_vals = isset( $entry['values'] ) && is_array( $entry['values'] ) ? $entry['values'] : array();
+						$pairs      = array();
+						foreach ( $entry_vals as $vk => $vv ) {
+							$pairs[] = $vk . '=' . $vv;
+						}
+						$other_keys = array_diff( $entry_keys, array_keys( $entry_vals ) );
+						?>
+						<tr>
+							<td style="white-space: nowrap;"><?php echo esc_html( wp_date( $time_format, isset( $entry['time'] ) ? (int) $entry['time'] : 0 ) ); ?></td>
+							<td><?php echo esc_html( $user_label ); ?></td>
+							<td><code><?php echo esc_html( isset( $entry['ability'] ) ? (string) $entry['ability'] : '' ); ?></code></td>
+							<td>
+								<?php if ( $pairs ) : ?>
+									<code><?php echo esc_html( implode( ', ', $pairs ) ); ?></code>
+								<?php endif; ?>
+								<?php if ( $other_keys ) : ?>
+									<span class="description">
+										<?php
+										printf(
+											/* translators: %s: comma-separated list of input field names. */
+											esc_html__( 'also sent: %s', 'ms-wp-abilities' ),
+											esc_html( implode( ', ', $other_keys ) )
+										);
+										?>
+									</span>
+								<?php endif; ?>
+								<?php if ( ! $pairs && ! $other_keys ) : ?>
+									<span class="description"><?php esc_html_e( 'no input', 'ms-wp-abilities' ); ?></span>
 								<?php endif; ?>
 							</td>
 						</tr>
