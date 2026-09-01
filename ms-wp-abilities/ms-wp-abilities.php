@@ -3,7 +3,7 @@
  * Plugin Name:       MS WordPress Abilities
  * Plugin URI:        https://miriamschwab.me/plugins/ms-wp-abilities
  * Description:       Registers WordPress core and custom abilities for MCP Adapter access, enabling AI agents to interact with this WordPress site.
- * Version:           1.11.1
+ * Version:           1.12.0
  * Author:            Miriam Schwab
  * Author URI:        https://miriamschwab.me
  * License:           GPL-2.0-or-later
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MSWPA_VERSION', '1.11.1' );
+define( 'MSWPA_VERSION', '1.12.0' );
 define( 'MSWPA_PREVIEW_EXPIRY_SECS', 600 );
 define( 'MSWPA_ABILITIES_SNAPSHOT_OPTION', 'mswpa_abilities_snapshot' );
 define( 'MSWPA_AUDIT_LOG_OPTION', 'mswpa_write_log' );
@@ -33,6 +33,7 @@ require_once plugin_dir_path( __FILE__ ) . 'includes/rest-write-guard.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/ability-policy.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/ability-fields.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/ability-audit-log.php';
+require_once plugin_dir_path( __FILE__ ) . 'includes/ability-catalog.php';
 
 add_action( 'init', 'mswpa_load_textdomain' );
 /**
@@ -2119,6 +2120,87 @@ function mswpa_inline_md( string $text ): string {
 	}
 
 	return $text;
+}
+
+// -------------------------------------------------------------------------
+// MCP server instructions: publish the ability catalog at connection time.
+// -------------------------------------------------------------------------
+// The adapter's default server carries three meta-tools, so an agent has to
+// spend a discover-abilities call before it can act. Writing the catalog into
+// the server's own instructions removes that round trip for every client, not
+// just ones with the right local config -- the portability argument from
+// decisions-log Decision 15, applied to the server rather than one ability.
+//
+// The filter is MCP Adapter 0.5.0+. On older adapters it never fires and the
+// server keeps its stock description, which is the correct degradation: this
+// plugin declares no adapter version floor.
+
+add_filter( 'mcp_adapter_default_server_config', 'mswpa_catalog_server_description' );
+/**
+ * Append the site's ability catalog to the default MCP server's description.
+ *
+ * DefaultServerFactory passes `server_description` to McpAdapter::create_server()
+ * as the server's `instructions`, which the MCP `initialize` response returns to
+ * the client. Everything the catalog needs is registered by this point: the
+ * factory builds servers on `mcp_adapter_init`, which fires after
+ * `wp_abilities_api_init`.
+ *
+ * Enumeration lives here rather than in includes/ability-catalog.php because it
+ * needs wp_get_abilities() and WP_Ability; the builder there takes plain arrays
+ * so it can be unit-tested against the two stubs in tests/bootstrap.php.
+ *
+ * The catalog lists every MCP-exposed ability on the site, not only this
+ * plugin's -- it describes what that server offers, and a list covering a third
+ * of it would be worse than none. Consistent with
+ * mswpa_enable_core_abilities_mcp_access(), which already reaches outside this
+ * plugin's namespace.
+ *
+ * @param mixed $config Default server config from the MCP Adapter.
+ * @return mixed Config with `server_description` extended, or unchanged.
+ */
+function mswpa_catalog_server_description( $config ) {
+	if ( ! is_array( $config ) ) {
+		return $config;
+	}
+
+	// MCP Adapter 0.6.0+ owns the exposure rule; mirror it locally on older ones.
+	$delegate = null;
+	if ( is_callable( array( '\\WP\\MCP\\Abilities\\McpAbilityExposure', 'is_meta_public' ) ) ) {
+		$delegate = array( '\\WP\\MCP\\Abilities\\McpAbilityExposure', 'is_meta_public' );
+	}
+
+	$rows = array();
+	foreach ( mswpa_query_abilities( '', '', '' ) as $ability ) {
+		if ( ! $ability instanceof WP_Ability ) {
+			continue;
+		}
+		$meta = $ability->get_meta();
+		if ( ! mswpa_ability_is_mcp_public( $meta, $delegate ) ) {
+			continue;
+		}
+		// Resources and prompts are not callable with execute-ability.
+		if ( ! mswpa_ability_is_mcp_tool( $meta ) ) {
+			continue;
+		}
+		$rows[] = array(
+			'name'        => $ability->get_name(),
+			'label'       => $ability->get_label(),
+			'description' => $ability->get_description(),
+		);
+	}
+
+	$catalog = mswpa_build_ability_catalog( $rows );
+	if ( '' === $catalog ) {
+		return $config;
+	}
+
+	$base = isset( $config['server_description'] ) && is_string( $config['server_description'] )
+		? rtrim( $config['server_description'] )
+		: '';
+
+	$config['server_description'] = '' === $base ? $catalog : $base . "\n\n" . $catalog;
+
+	return $config;
 }
 
 // -------------------------------------------------------------------------

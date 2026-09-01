@@ -4,7 +4,7 @@ Tags: ai, mcp, abilities, rest-api, agents
 Requires at least: 6.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.11.1
+Stable tag: 1.12.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -105,6 +105,11 @@ Yes, three things. When a post update is staged via preview-post-update, the pen
 Abilities are registered under the `miriamschwab` category, which is specific to the miriamschwab.me site. These abilities are designed for single-site use and include site-specific post type awareness.
 
 == Changelog ==
+
+= 1.12.0 - 2026-09-01 =
+* Added: the MCP server now tells connecting agents what the site can do. The adapter's default server exposes three meta-tools, so an agent had to spend a discover-abilities call — often a get-ability-info call as well — before it could act. The site's MCP-exposed abilities, with their descriptions, are now written into the server's own instructions and delivered when the connection opens. Nothing to configure and no new endpoint: the list is generated from the ability registry on each connection, so abilities added by any plugin appear automatically.
+* Added: the catalog degrades rather than growing without limit. Above a 16,000-byte budget it drops from names-with-descriptions to names-with-labels, then to bare names, and produces nothing at all if even that will not fit — in which case the server keeps its stock description. Degrading by whole tiers means no ability is ever silently missing from the list, which a truncated catalog could not guarantee.
+* Note: requires MCP Adapter 0.5.0 or newer, which is where the filter this uses was added. On older adapters the server keeps its stock description and nothing else changes.
 
 = 1.11.1 - 2026-08-30 =
 * Fixed: the write audit trail added in 1.11.0 recorded *that* a plugin was activated or updated, and that a media item's metadata changed, without recording *which* one. The list of input fields whose values are safe to record was written from assumption rather than from the abilities' actual input schemas, and the write abilities do not share a naming convention for their identifier — `update-media-meta` takes `ID` and `activate-plugin`/`update-plugin` take `plugin_file`, neither of which was on the list, while an `attachment_id` field no ability accepts was on it. Those three are corrected. Entries written by 1.11.0 are unaffected and still readable; they simply lack the identifier for those abilities.
